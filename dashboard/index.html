@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch Radar — pre-token protocols ranked by implied launch value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="band">
+  <div class="band-in">
+    <p class="kicker">Launch Radar · model radar-2 “peer multiple”</p>
+    <h1>Which pre-token protocol is worth farming next?</h1>
+    <p class="lede" id="lede">Reading the snapshot…</p>
+  </div>
+</header>
+<main>
+  <section class="panel" aria-label="Board controls">
+    <div class="controls">
+      <label>Search <input id="q" type="search" placeholder="name or slug" autocomplete="off"></label>
+      <label>Category <select id="cat"></select></label>
+      <label>Chain <select id="chain"></select></label>
+      <label>Tier
+        <select id="tier">
+          <option value="all">All pre-token</option>
+          <option value="watchlist">Watchlist (≥ $50M TVL)</option>
+          <option value="early">Early (below the floor)</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="sort">
+          <option value="rank">Implied value (rank)</option>
+          <option value="tvl">TVL</option>
+          <option value="change">7-day change</option>
+          <option value="age">Age (days tokenless)</option>
+          <option value="multiple">Peer multiple</option>
+        </select>
+      </label>
+      <div class="seg" role="group" aria-label="View">
+        <button id="view-board" class="on" type="button">Pre-token board</button>
+        <button id="view-live" type="button">Live tokens</button>
+      </div>
+    </div>
+    <p class="count" id="count"></p>
+    <div class="tablewrap">
+      <table id="board">
+        <thead><tr>
+          <th class="num">#</th><th>Protocol</th><th>Chains</th>
+          <th class="num">TVL</th><th class="num">7d</th><th class="num">Age</th>
+          <th class="num">Peer ×</th><th class="num">Implied value</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <table id="live" hidden>
+        <thead><tr>
+          <th>Protocol</th><th>Symbol</th><th>Chains</th>
+          <th class="num">TVL</th><th class="num">Market cap</th><th class="num">7d</th>
+        </tr></thead>
+        <tbody id="liverows"></tbody>
+      </table>
+    </div>
+  </section>
+  <section class="panel" id="detail" hidden aria-label="Protocol detail"></section>
+  <section class="panel method" aria-label="How the model works">
+    <h2>How the implied value is priced</h2>
+    <p>The snapshot prices its own future launches. Of its 758 protocols, the ones whose token
+    already trades carry both a TVL and a market cap; the median market-cap/TVL ratio of those
+    pairs is the market's own answer to “what is a dollar of TVL worth once it has a token?”.
+    Each pre-token protocol is priced at its category's median ratio — shrunk toward the global
+    median so a thin category cannot shout — adjusted for its 7-day TVL momentum and for how long
+    it has run with no token recorded:</p>
+    <p class="formula">implied value = TVL × category peer multiple × growth factor × seasoning factor</p>
+    <ul>
+      <li><strong>Growth factor</strong> = 1 + clamp(7-day change, −50%…+100%) × 0.6. Unreported change counts as 0.</li>
+      <li><strong>Seasoning factor</strong> = 0.75 + 0.5 × min(age, 1,460 days) / 1,460. Longer tokenless, richer the accrued unpriced activity; an unrecorded listing date sits at the neutral 730 days.</li>
+      <li><strong>No name is special-cased.</strong> The same function scores every row, and every multiple is recomputed from the snapshot at run time — re-run on a future snapshot, the same program finds future launches early.</li>
+      <li><strong>Pre-token means “records no token”</strong> in DefiLlama's record (no market cap, no CoinGecko id, no symbol) — a claim about the record, never proof a token does not exist. Trading protocols sit in the Live view at the market's own values, never mixed into this ranking.</li>
+    </ul>
+    <h3>Category peer multiples, calibrated from this snapshot</h3>
+    <div class="tablewrap"><table id="calib">
+      <thead><tr><th>Category</th><th class="num">Trading peers</th><th class="num">Median mcap / TVL</th></tr></thead>
+      <tbody id="calibrows"></tbody>
+    </table></div>
+    <p class="fine" id="fine"></p>
+  </section>
+</main>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
