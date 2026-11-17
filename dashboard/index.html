@@ -9,7 +9,7 @@
 <body>
 <header class="band">
   <div class="band-in">
-    <p class="kicker">Launch Radar · model radar-3 “peer band”</p>
+    <p class="kicker">Launch Radar · model radar-4 “peer band, efficiency &amp; sensitivity”</p>
     <h1>Which pre-token protocol is worth farming next?</h1>
     <p class="lede" id="lede">Reading the snapshot…</p>
     <div class="stats" id="stats">
@@ -51,6 +51,7 @@
           <option value="multiple">Peer multiple</option>
           <option value="width">Widest value band</option>
           <option value="peers">Most trading peers</option>
+          <option value="efficiency">Implied value per $1 farmed</option>
         </select>
       </label>
       <div class="seg" role="group" aria-label="View">
@@ -87,13 +88,17 @@
     the band between its category's 25th and 75th percentile ratios, so a price never pretends
     to be more certain than the peers behind it:</p>
     <p class="formula">implied value = TVL × category median multiple × momentum factor × seasoning factor<br>
-    implied range = TVL × category quartile multiple × momentum factor × seasoning factor</p>
+    implied range = TVL × category quartile multiple × momentum factor × seasoning factor<br>
+    implied per $1 farmed = implied value ÷ the farm capital the row's own plan commits<br>
+    halving / doubling multiple = the peer multiple at which the implied value halves / doubles</p>
     <ul>
       <li><strong>Peer band.</strong> Each category percentile is shrunk geometrically toward the global one with weight peers/(peers+8): a category with forty trading peers keeps its own spread; one with two leans on the market's. A category with no trading peers is priced on the global band and says so.</li>
       <li><strong>Momentum factor.</strong> Gains and losses are not symmetric evidence — a doubling of TVL in a week can be rented with an incentive, a halving is rarely faked. Gains pass through at 0.50 (clamped at +100%, so at most ×1.50), losses at 0.90 (clamped at −50%, so at least ×0.55). An unreported 7-day change is <em>not</em> read as zero: the factor is 1 and the row is flagged.</li>
       <li><strong>Seasoning factor</strong> = 0.80 + 0.45 × √(min(age, 1,460 days) / 1,460). Concave: the premium for accrued, unpriced activity arrives early — the second tokenless year says less than the first. An unrecorded listing date is priced at the median age of the ranked protocols whose dates are recorded, and the row is flagged.</li>
       <li><strong>Confidence</strong> follows the evidence behind the band: deep (10+ trading peers), solid (4–9), thin (1–3), global (none — priced on the market-wide band).</li>
-      <li><strong>Farm plans</strong> are written for the cheapest chain the protocol itself runs on, with gas quoted for that chain: the same position costs about $10.50 to set up on Ethereum and about $0.25 on Base, and a plan that hides that is not a plan. A protocol whose TVL fell 15% or more in the week gets a safety-check step before any deposit; one that grew 40% or more gets a sizing caution.</li>
+      <li><strong>Farm efficiency.</strong> A ranking by implied value alone cannot say where a farming dollar works hardest, because each row's plan commits a different amount: $50 against a small protocol, $500 against a giant (the tiers are in the farm-plans note below). So every row also carries its implied value <em>per $1 of the farm capital its own plan commits</em>, and the board sorts by it. Read it beside the evidence grade, never instead of it: the highest per-$ figures sit on small protocols, where the band behind the price is often thin — efficiency on thin evidence is a lead, not a conclusion.</li>
+      <li><strong>What the market must believe.</strong> The price is linear in the peer multiple — momentum and seasoning are the protocol's own record, not the market's mood — so each detail view states the multiple at which the price halves and the one at which it doubles, and where those lines fall against the category's own band. If the halving line sits below the band's low end, even the pessimistic quarter of peers leaves the price more than half intact; if the doubling line sits inside the band, the category's stronger quarter already trades there. The sensitivity is stated in the market's own units, from the row's own numbers.</li>
+      <li><strong>Farm plans</strong> are written for the cheapest chain the protocol itself runs on, with gas quoted for that chain: the same position costs about $10.50 to set up on Ethereum and about $0.25 on Base, and a plan that hides that is not a plan. The position each plan commits is sized from the protocol's own TVL — $50 under $10M, $100 to $150 through the middle tiers, $250 at $1B, $500 at $5B and beyond — because a plan sized without regard to the protocol's depth is not a plan either. A protocol whose TVL fell 15% or more in the week gets a safety-check step before any deposit; one that grew 40% or more gets a sizing caution.</li>
       <li><strong>No name is special-cased.</strong> The same function scores every row, and every multiple is recomputed from the snapshot at run time — re-run on a future snapshot, the same program finds future launches early.</li>
       <li><strong>Pre-token means “records no token”</strong> in DefiLlama's record (no market cap, no CoinGecko id, no symbol) — a claim about the record, never proof a token does not exist. Trading protocols sit in the Live view at the market's own values, never mixed into this ranking.</li>
     </ul>

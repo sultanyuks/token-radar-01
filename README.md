@@ -11,7 +11,7 @@ the reader a farm plan for every row.
 
 **Entry:** "Launch Radar" by @bright-otter-11 · Repository: https://github.com/sultanyuks/token-radar-01
 
-## The model (radar-3, peer band)
+## The model (radar-4, peer band + efficiency & sensitivity)
 
 The snapshot prices its own future launches. Of its 758 protocols, 144 already trade; 128 of them
 carry both a TVL and a market cap. Each category's peer band is the 25th percentile, median and
@@ -26,12 +26,23 @@ momentum: gains pass at 0.50 (clamped +100%, at most ×1.50); losses at 0.90 (cl
           an unreported 7-day change is not read as zero — the factor is 1 and the row is flagged
 seasoning = 0.80 + 0.45 × √(min(age_days, 1460) / 1460);  an unrecorded listing date is priced at
           the median recorded age of the ranked set, and the row is flagged
+implied per $1 farmed = implied value ÷ the farm capital the row's own plan commits ($50–$500 by TVL)
+halving / doubling multiple = the peer multiple at which the implied value halves / doubles
 ```
 
 The asymmetry is the point: a doubling of TVL in a week can be rented with an incentive, while a
 halving is rarely faked, so losses count for more than gains. The band is the point too: a price
 sourced from one trading peer is shown with the wide range and the "thin evidence" label it
 deserves, and a category with no trading peers is priced on the global band and says so.
+
+Two instruments ride on the price. **Farm efficiency**: each row's plan commits a different
+amount of capital ($50 against a small protocol, $500 against a giant), so the ranking alone
+cannot say where a farming dollar works hardest — every row therefore also carries its implied
+value per $1 of the farm capital its own plan commits, and the board sorts by it, to be read
+beside the evidence grade and never instead of it. **Sensitivity**: the price is linear in the
+peer multiple, so each detail view states what the market must believe — the multiple at which
+the price halves and the one at which it doubles, and whether the category's own band already
+crosses either line.
 
 No protocol name is special-cased; every multiple is recomputed from the snapshot at run time, so
 the same program re-run on a future snapshot finds future launches early. A protocol is ranked
@@ -58,10 +69,11 @@ one that grew 40% or more gets a sizing caution instead.
 - `lib/model.ts` — the calibration (peer bands), the ranking and the farm-plan generator.
 - `vendor/makefun-board.ts` — the kit's dossier library, byte for byte.
 - `dashboard/` — the static page (no network): sortable, filterable board with a peer-band
-  range bar on every row, per-protocol detail with the value breakdown, the band, the evidence
-  grade and the farm plan, a Live view, and the method with the full calibration table.
-- `screenshots/` — the board, a detail view (Steakhouse Financial) and a filtered view
-  (Lending), rendered from this dashboard.
+  range bar and an implied-per-$1-farmed figure on every row, per-protocol detail with the
+  value breakdown, the band, the evidence grade, a "what the market must believe" sensitivity
+  note and the farm plan, a Live view, and the method with the full calibration table.
+- `screenshots/` — the board, a detail view (Steakhouse Financial), a filtered view sorted
+  by farm efficiency, and the Live view, rendered from this dashboard.
 
 ## Run it
 

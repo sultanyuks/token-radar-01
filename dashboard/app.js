@@ -1,9 +1,10 @@
 /* Launch Radar page: renders window.RADAR (written by main.ts beside this page) with no network.
-   Board view: every pre-token protocol, filterable and sortable, each row opening a detail view
-   with its value breakdown, its peer band and its farm plan. Live view: the protocols whose token
-   already trades, kept apart at the market's own values. Query parameters (?cat=, ?tier=, ?tvl=,
-   ?q=, ?detail=, ?view=, ?sort=) set the opening state, which is how the entry's screenshots were
-   taken. */
+   Board view: every pre-token protocol, filterable and sortable — including by implied value per
+   $1 of farm capital — each row opening a detail view with its value breakdown, its peer band,
+   what the market must believe to halve or double its price, and its farm plan. Live view: the
+   protocols whose token already trades, kept apart at the market's own values. Query parameters
+   (?cat=, ?tier=, ?tvl=, ?q=, ?detail=, ?view=, ?sort=) set the opening state, which is how the
+   entry's screenshots were taken. */
 'use strict';
 
 const R = window.RADAR;
@@ -79,6 +80,7 @@ function filtered() {
     multiple: (a, b) => b.peer_multiple - a.peer_multiple,
     width: (a, b) => b.implied_high_usd / b.implied_low_usd - a.implied_high_usd / a.implied_low_usd,
     peers: (a, b) => b.category_peers - a.category_peers || a.rank - b.rank,
+    efficiency: (a, b) => b.implied_per_farm_dollar - a.implied_per_farm_dollar || a.rank - b.rank,
   }[state.sort];
   rows.sort(by);
   return rows;
@@ -86,7 +88,7 @@ function filtered() {
 
 function renderBoard() {
   const rows = filtered();
-  $('count').textContent = `${rows.length} of ${R.board_size} pre-token protocols shown · ranked by implied launch value · the bar is each category's peer band (25th–75th percentile), the tick its price`;
+  $('count').textContent = `${rows.length} of ${R.board_size} pre-token protocols shown · ranked by implied launch value · the bar is each category's peer band (25th–75th percentile), the tick its price · the small figure under a price is the implied value per $1 of the farm capital its plan commits`;
   $('rows').innerHTML = rows
     .map(
       (r) => `<tr class="row${state.detail === r.slug ? ' sel' : ''}" data-slug="${esc(r.slug)}">
@@ -97,7 +99,7 @@ function renderBoard() {
       <td class="num ${r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg'}">${pct(r.change_7d)}</td>
       <td class="num">${r.age_days === null ? '—' : `${r.age_days}d`}</td>
       <td class="num">${r.peer_multiple.toFixed(2)}×</td>
-      <td class="num implied">${money(r.implied_value_usd)}</td>
+      <td class="num implied">${money(r.implied_value_usd)}<br><span class="perdollar">${money(r.implied_per_farm_dollar)} per $1 farmed</span></td>
       <td class="range">${rangeBar(r)}<span class="rangetext">${money(r.implied_low_usd)} – ${money(r.implied_high_usd)}</span></td>
       <td><button class="farmbtn" type="button" data-farm="${esc(r.slug)}">Farm plan</button></td>
     </tr>`,
@@ -130,6 +132,23 @@ function caveats(r) {
   return out;
 }
 
+/* What the market must believe: the price is TVL × multiple, so it halves at half the pricing
+   multiple and doubles at twice it. The sentences say where those two lines fall against the
+   category's own band — inside it, the move needs no new mood, only the peers' weaker or
+   stronger quarter; outside it, the band itself is the argument. */
+function believeLines(r) {
+  const half = `<strong>${r.half_multiple.toFixed(2)}×</strong> halves this price (to ${moneyFull(Math.round(r.implied_value_usd / 2))}); <strong>${r.double_multiple.toFixed(2)}×</strong> doubles it (to ${moneyFull(r.implied_value_usd * 2)}).`;
+  const low =
+    r.half_multiple < r.peer_band_low
+      ? `Even the band's low end (${r.peer_band_low.toFixed(2)}×, its category's 25th percentile) leaves the launch worth ${moneyFull(r.implied_low_usd)} — the pessimistic quarter of its peers does not halve this price.`
+      : `The halving line falls inside the category's own band (${r.peer_band_low.toFixed(2)}× – ${r.peer_band_high.toFixed(2)}×): its weaker quarter of peers already trades at or below it, so a halved price asks for no new pessimism.`;
+  const high =
+    r.double_multiple <= r.peer_band_high
+      ? `The doubling line also falls inside the band — the category's stronger quarter of peers already trades above ${r.double_multiple.toFixed(2)}×.`
+      : `Doubling takes ${r.double_multiple.toFixed(2)}×, above the band's high end (${r.peer_band_high.toFixed(2)}×) — more per TVL dollar than this category's strongest quarter of peers fetches today.`;
+  return `${half} ${low} ${high}`;
+}
+
 function showDetail(slug, scroll = true) {
   const r = R.rows.find((x) => x.slug === slug);
   const box = $('detail');
@@ -152,8 +171,12 @@ function showDetail(slug, scroll = true) {
       <div class="stat"><div class="k">Seasoning factor</div><div class="v">${r.seasoning_multiplier.toFixed(2)}× <small>(${r.age_days === null ? 'age unrecorded' : `${r.age_days} days tokenless`})</small></div></div>
       <div class="stat"><div class="k">Implied launch value</div><div class="v" style="color:var(--teal)">${moneyFull(r.implied_value_usd)}</div></div>
       <div class="stat"><div class="k">Implied range</div><div class="v">${money(r.implied_low_usd)} – ${money(r.implied_high_usd)}</div></div>
+      <div class="stat"><div class="k">Farm capital (its plan)</div><div class="v">${moneyFull(r.farm_capital_usd)}</div></div>
+      <div class="stat"><div class="k">Implied per $1 farmed</div><div class="v">${money(r.implied_per_farm_dollar)} <small>per $1 of that capital</small></div></div>
     </div>
     <p class="eq">${moneyFull(r.tvl_usd)} TVL × ${r.peer_multiple.toFixed(2)} peer multiple × ${r.growth_multiplier.toFixed(2)} momentum × ${r.seasoning_multiplier.toFixed(2)} seasoning = <strong>${moneyFull(r.implied_value_usd)}</strong> if ${esc(r.name)} launched a token at its record today — and ${moneyFull(r.implied_low_usd)} to ${moneyFull(r.implied_high_usd)} across the middle half of its category's trading peers.</p>
+    <h3>What the market must believe</h3>
+    <p class="believe">${believeLines(r)}</p>
     ${notes.length > 0 ? `<ul class="caveats">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <h3>Farm plan — written for ${esc(r.farm_chain)}, the cheapest of its chains to transact on</h3>
     <ol class="steps">${r.farm_steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>`;
@@ -175,6 +198,7 @@ function init() {
   $('lede').innerHTML =
     `The snapshot (<strong>${esc(R.as_of)}</strong>, DefiLlama via make.fun) holds <strong>${R.board_size} protocols that record no token</strong>. ` +
     `This radar prices each one's launch from the spread of its category's trading peers and ranks it — <strong>${R.watchlist_size} watchlist protocols</strong> at or above ${money(R.floor_usd)} TVL and every early one below the floor — with the steps to farm each, written for the cheapest chain it runs on. ` +
+    `Each row also states the implied value standing behind every $1 of the farm capital its own plan commits (sort by it), and each detail view states the peer multiple at which its price would halve or double. ` +
     `Trading protocols are set apart in the Live view.`;
   $('stat-rows').textContent = String(R.board_size);
   $('stat-watch').textContent = `${R.watchlist_size} of ${R.watchlist_size}`;

@@ -1,4 +1,5 @@
-// Launch Radar model (radar-3, "peer band"): one sealed snapshot in, one ranked board out.
+// Launch Radar model (radar-4, "peer band + efficiency & sensitivity"): one sealed snapshot
+// in, one ranked board out.
 //
 // THE MODEL. The snapshot itself says what a launched token is worth: many of its protocols
 // already trade, and each carries both a TVL and a market cap. For every category we take the
@@ -25,6 +26,21 @@
 //                    tokenless year says less than its first. An unrecorded listing date is
 //                    priced at the median age of the ranked protocols whose dates are recorded,
 //                    never at a round number this file invents.
+//
+// Two reader's instruments ride on the same price, both computed from the same record:
+//   farm efficiency  implied value per $1 of the farm capital the row's own plan commits
+//                    (capitalFor below: $50 to $500 by the protocol's TVL tier). The board's
+//                    job is to say where a farming dollar works hardest, and the raw ranking
+//                    cannot: a giant's plan commits $500 against its implied value while a
+//                    small protocol's commits $50, so the small one can stand behind more
+//                    implied value per farm dollar. The figure is always shown beside the
+//                    capital it divides by and the evidence grade behind the price — per-$
+//                    efficiency on thin evidence is a lead, not a conclusion.
+//   sensitivity      implied value is linear in the peer multiple (the other two factors are
+//                    the protocol's own record, not the market's mood), so each row states
+//                    the multiple at which its price halves and the one at which it doubles,
+//                    and whether its own category band already crosses either line. That is
+//                    "what the market must believe", in the market's own units.
 //
 // No protocol name is ever special-cased: the same function scores every row, and every multiple
 // is recomputed from the snapshot at run time, so the same program re-run on a future snapshot
@@ -65,7 +81,7 @@ export class SnapshotError extends Error {
   }
 }
 
-export const MODEL_VERSION = 'radar-3 peer-band';
+export const MODEL_VERSION = 'radar-4 peer-band, efficiency & sensitivity';
 
 /** Shrinkage strength: a category percentile is blended toward the global one as if the global
  *  figure were SHRINK_PEERS extra observations of the category. */
@@ -240,6 +256,14 @@ export interface Scored {
   seasoningMult: number;
   age: number | null;
   ageAssumed: boolean;
+  /** The farm capital this row's own plan commits, from its TVL tier (capitalFor below). */
+  farmCapital: number;
+  /** Implied launch value standing behind each $1 of that farm capital. */
+  impliedPerDollar: number;
+  /** The peer multiple at which this row's implied value halves: half the pricing multiple. */
+  halfMultiple: number;
+  /** The peer multiple at which this row's implied value doubles: twice the pricing multiple. */
+  doubleMultiple: number;
 }
 
 /**
@@ -259,6 +283,7 @@ export function impliedValue(p: SnapshotProtocol, asOf: string, bands: Bands, ag
   const implied = Math.max(1, Math.round(p.tvl_usd * band.multiple * growthMult * seasoningMult));
   const impliedLow = Math.max(1, Math.min(implied, Math.round(p.tvl_usd * band.low * growthMult * seasoningMult)));
   const impliedHigh = Math.max(implied, Math.round(p.tvl_usd * band.high * growthMult * seasoningMult));
+  const farmCapital = capitalFor(p);
   return {
     implied,
     impliedLow,
@@ -274,6 +299,10 @@ export function impliedValue(p: SnapshotProtocol, asOf: string, bands: Bands, ag
     seasoningMult,
     age,
     ageAssumed: age === null,
+    farmCapital,
+    impliedPerDollar: Math.round(implied / farmCapital),
+    halfMultiple: band.multiple / 2,
+    doubleMultiple: band.multiple * 2,
   };
 }
 
@@ -303,6 +332,10 @@ export interface BoardRow {
     growth_pct: number;
     growth_multiplier: number;
     seasoning_multiplier: number;
+    farm_capital_usd: number;
+    implied_per_farm_dollar: number;
+    half_multiple: number;
+    double_multiple: number;
   };
   farm_steps: string[];
 }
@@ -341,6 +374,10 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; bands: Band
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       seasoning_multiplier: round4(s.seasoningMult),
+      farm_capital_usd: s.farmCapital,
+      implied_per_farm_dollar: s.impliedPerDollar,
+      half_multiple: round4(s.halfMultiple),
+      double_multiple: round4(s.doubleMultiple),
     },
     farm_steps: farmSteps(p, s),
   }));
@@ -722,6 +759,10 @@ export interface RadarRow {
   growth_multiplier: number;
   change_reported: boolean;
   seasoning_multiplier: number;
+  farm_capital_usd: number;
+  implied_per_farm_dollar: number;
+  half_multiple: number;
+  double_multiple: number;
   farm_chain: string;
   farm_steps: string[];
 }
@@ -781,6 +822,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       growth_multiplier: r.model.growth_multiplier,
       change_reported: r.change_7d !== null,
       seasoning_multiplier: r.model.seasoning_multiplier,
+      farm_capital_usd: r.model.farm_capital_usd,
+      implied_per_farm_dollar: r.model.implied_per_farm_dollar,
+      half_multiple: r.model.half_multiple,
+      double_multiple: r.model.double_multiple,
       farm_chain: r.farm_chain,
       farm_steps: r.farm_steps,
     })),
