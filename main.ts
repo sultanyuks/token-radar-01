@@ -1,8 +1,8 @@
 // Launch Radar (token-radar-01 entry, Node 22, standard library only).
 //
 // Reads the sealed snapshot (/input/snapshot.json, or --input <file|dir>), prices every pre-token
-// protocol with the peer-multiple model in lib/model.ts, and writes into /output:
-//   board.json    the ranked board the gate checks
+// protocol with the peer-band model in lib/model.ts, and writes into /output:
+//   board.json    the ranked board the gate checks (implied value, its peer band, farm plan)
 //   data.js       the dashboard's dataset, written beside the page it copies in
 //   dashboard/    this repository's static page (renders with no network)
 //   screenshots/  this repository's three dashboard screenshots

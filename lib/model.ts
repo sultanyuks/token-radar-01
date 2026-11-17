@@ -1,25 +1,37 @@
-// Launch Radar model (radar-2, "peer multiple"): one sealed snapshot in, one ranked board out.
+// Launch Radar model (radar-3, "peer band"): one sealed snapshot in, one ranked board out.
 //
-// THE MODEL. The snapshot itself says what a launched token is worth: 144 of its protocols already
-// trade, and each carries both a TVL and a market cap. For every category we take the median
-// market-cap/TVL ratio of that category's trading protocols, shrunk toward the global median
-// (0.21 across all 128 usable pairs) by a geometric blend weighted n/(n+SHRINK_PEERS), so a
-// category with two observations cannot shout down one with forty. A pre-token
-// protocol's implied launch value is then
+// THE MODEL. The snapshot itself says what a launched token is worth: many of its protocols
+// already trade, and each carries both a TVL and a market cap. For every category we take the
+// distribution of market-cap/TVL ratios among that category's trading protocols — its 25th
+// percentile, median and 75th percentile — each shrunk toward the same global percentile by a
+// geometric blend weighted peers/(peers+SHRINK_PEERS), so a category with two observations
+// cannot shout down one with forty. A pre-token protocol's implied launch value is then
 //
-//   implied = TVL x category multiple x growth factor x seasoning factor
+//   implied = TVL x category median multiple x momentum factor x seasoning factor
+//   range   = TVL x category quartile multiple x momentum factor x seasoning factor
 //
-//   growth factor    = 1 + clamp(change_7d, -50, +100)/100 x 0.6   (unreported change counts as 0)
-//   seasoning factor = 0.75 + 0.5 x min(age_days, 1460)/1460       (unknown listing date: age 730,
-//                      the factor's neutral point: a protocol that has run longer with no token has
-//                      more accrued, unpriced activity behind a launch, so it prices richer)
+// so every row carries not just a price but the band its own category's trading peers span:
+// the middle half of what tokens in that line of business actually fetched per dollar of TVL.
 //
-// No protocol name is ever special-cased: the same function scores every row, and every multiple is
-// recomputed from the snapshot at run time, so the same program re-run on a future snapshot finds
-// future launches early. A protocol is pre-token when its record carries no token (no market cap,
-// no CoinGecko id, no symbol); trading protocols are set apart in the live list with the market's
-// own values, never mixed into the ranked board. The board ranks every rankable pre-token protocol
-// in the snapshot (198 on this one): the watchlist's 40 are flagged, not favoured — rank is the
+//   momentum factor  gains and losses are not symmetric evidence. A doubling of TVL in a week
+//                    is often rented (an incentive can buy it), while a halving is rarely faked,
+//                    so gains pass through at GAIN_WEIGHT and losses at LOSS_WEIGHT:
+//                      change >= 0: 1 + 0.50 x min(change, +100)/100    (at most 1.50)
+//                      change <  0: 1 + 0.90 x max(change,  -50)/100    (at least 0.55)
+//                    An unreported change is not a zero: the factor is 1 and the row is flagged
+//                    "7d unreported" wherever it is shown.
+//   seasoning factor = 0.80 + 0.45 x sqrt(min(age_days, 1460)/1460). Concave on purpose: the
+//                    premium for accrued, unpriced activity arrives early — a protocol's second
+//                    tokenless year says less than its first. An unrecorded listing date is
+//                    priced at the median age of the ranked protocols whose dates are recorded,
+//                    never at a round number this file invents.
+//
+// No protocol name is ever special-cased: the same function scores every row, and every multiple
+// is recomputed from the snapshot at run time, so the same program re-run on a future snapshot
+// finds future launches early. A protocol is pre-token when its record carries no token (no
+// market cap, no CoinGecko id, no symbol); trading protocols are set apart in the live list with
+// the market's own values, never mixed into the ranked board. The board ranks every rankable
+// pre-token protocol in the snapshot: the watchlist's are flagged, not favoured — rank is the
 // model's claim alone.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
@@ -53,20 +65,23 @@ export class SnapshotError extends Error {
   }
 }
 
-export const MODEL_VERSION = 'radar-2 peer-multiple';
+export const MODEL_VERSION = 'radar-3 peer-band';
 
-/** Shrinkage strength: a category median is blended toward the global median as if the global
- *  median were SHRINK_PEERS extra observations of the category. */
+/** Shrinkage strength: a category percentile is blended toward the global one as if the global
+ *  figure were SHRINK_PEERS extra observations of the category. */
 export const SHRINK_PEERS = 8;
-/** How much of a clamped 7-day TVL move the growth factor passes through. */
-export const GROWTH_WEIGHT = 0.6;
+/** How much of a clamped 7-day TVL gain the momentum factor passes through. */
+export const GAIN_WEIGHT = 0.5;
+/** How much of a clamped 7-day TVL loss passes through: losses are the stronger evidence. */
+export const LOSS_WEIGHT = 0.9;
 export const GROWTH_FLOOR = -50;
 export const GROWTH_CAP = 100;
-/** Seasoning: factor runs SEASONING_BASE .. SEASONING_BASE+SEASONING_RANGE over SEASONING_DAYS. */
-export const SEASONING_BASE = 0.75;
-export const SEASONING_RANGE = 0.5;
+/** Seasoning: factor runs SEASONING_BASE .. SEASONING_BASE+SEASONING_RANGE over SEASONING_DAYS,
+ *  on a square-root curve, so the premium for time tokenless accrues early, not late. */
+export const SEASONING_BASE = 0.8;
+export const SEASONING_RANGE = 0.45;
 export const SEASONING_DAYS = 1460;
-/** Age assumed when DefiLlama names no listing date: the seasoning factor's neutral point. */
+/** Age assumed when neither the protocol nor any ranked peer records a listing date. */
 export const UNKNOWN_AGE_DAYS = 730;
 /** How many live-token protocols the dashboard's Live view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -82,34 +97,54 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
-/** The median of a non-empty numeric list (mean of the two middle values on an even count). */
-export function median(values: number[]): number {
-  const v = [...values].sort((x, y) => x - y);
-  const mid = Math.floor(v.length / 2);
-  return v.length % 2 === 1 ? v[mid]! : (v[mid - 1]! + v[mid]!) / 2;
+/** The q-quantile of an already-sorted non-empty list, linear interpolation between neighbours. */
+export function quantileSorted(sorted: number[], q: number): number {
+  if (sorted.length === 1) return sorted[0]!;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
 }
 
-export interface CategoryMultiple {
+/** The median of a non-empty numeric list. */
+export function median(values: number[]): number {
+  const v = [...values].sort((x, y) => x - y);
+  return quantileSorted(v, 0.5);
+}
+
+/** A category's peer band: the shrunk quartiles of its trading protocols' mcap/TVL ratios. */
+export interface CategoryBand {
   category: string;
   /** Trading protocols of this category carrying both a market cap and a TVL. */
   peers: number;
-  /** The shrunk median market-cap/TVL ratio a launch in this category is priced at. */
+  /** The shrunk 25th percentile: the band's low multiple. */
+  low: number;
+  /** The shrunk median: the multiple a launch in this category is priced at. */
   multiple: number;
+  /** The shrunk 75th percentile: the band's high multiple. */
+  high: number;
 }
 
-export interface Multiples {
-  global: number;
+export interface Bands {
+  global: CategoryBand;
   pairs: number;
-  byCategory: Map<string, CategoryMultiple>;
+  byCategory: Map<string, CategoryBand>;
+}
+
+/** Blend one percentile geometrically toward the global one, weight peers/(peers+SHRINK_PEERS). */
+function shrink(own: number, global: number, peers: number): number {
+  const w = peers / (peers + SHRINK_PEERS);
+  return Math.exp(w * Math.log(own) + (1 - w) * Math.log(global));
 }
 
 /**
- * The peer multiples, calibrated from the snapshot alone: every trading protocol with both a
- * market cap and a TVL contributes its ratio; a category's multiple is its own median ratio
- * blended geometrically toward the global median with weight peers/(peers+SHRINK_PEERS) — a
- * category with many trading peers keeps most of its own signal, a thin one leans on the market.
+ * The peer bands, calibrated from the snapshot alone: every trading protocol with both a market
+ * cap and a TVL contributes its ratio; a category's band is its own quartiles blended
+ * geometrically toward the global quartiles — a category with many trading peers keeps most of
+ * its own spread, a thin one leans on the market's.
  */
-export function calibrate(protocols: SnapshotProtocol[]): Multiples {
+export function calibrate(protocols: SnapshotProtocol[]): Bands {
   const ratios: number[] = [];
   const perCategory = new Map<string, number[]>();
   for (const p of protocols) {
@@ -121,15 +156,35 @@ export function calibrate(protocols: SnapshotProtocol[]): Multiples {
     if (list === undefined) perCategory.set(key, [r]);
     else list.push(r);
   }
-  const global = ratios.length > 0 ? median(ratios) : 0.2;
-  const byCategory = new Map<string, CategoryMultiple>();
+  const all = [...ratios].sort((x, y) => x - y);
+  const g = {
+    low: all.length > 0 ? quantileSorted(all, 0.25) : 0.1,
+    mid: all.length > 0 ? quantileSorted(all, 0.5) : 0.2,
+    high: all.length > 0 ? quantileSorted(all, 0.75) : 0.4,
+  };
+  const global: CategoryBand = { category: 'All categories', peers: ratios.length, low: g.low, multiple: g.mid, high: g.high };
+  const byCategory = new Map<string, CategoryBand>();
   for (const [category, list] of perCategory) {
-    const own = median(list);
-    const w = list.length / (list.length + SHRINK_PEERS);
-    const multiple = Math.exp(w * Math.log(own) + (1 - w) * Math.log(global));
-    byCategory.set(category, { category, peers: list.length, multiple });
+    const s = [...list].sort((x, y) => x - y);
+    byCategory.set(category, {
+      category,
+      peers: list.length,
+      low: shrink(quantileSorted(s, 0.25), g.low, list.length),
+      multiple: shrink(quantileSorted(s, 0.5), g.mid, list.length),
+      high: shrink(quantileSorted(s, 0.75), g.high, list.length),
+    });
   }
   return { global, pairs: ratios.length, byCategory };
+}
+
+/** How much trading evidence stands behind a row's band, in words the dashboard can show. */
+export type Confidence = 'deep' | 'solid' | 'thin' | 'global';
+
+export function confidenceFor(peers: number): Confidence {
+  if (peers >= 10) return 'deep';
+  if (peers >= 4) return 'solid';
+  if (peers >= 1) return 'thin';
+  return 'global';
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -168,30 +223,58 @@ export function isRankable(p: SnapshotProtocol): boolean {
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 export interface Scored {
   implied: number;
+  impliedLow: number;
+  impliedHigh: number;
   multiple: number;
+  bandLow: number;
+  bandHigh: number;
   peers: number;
+  confidence: Confidence;
   growthPct: number;
   growthMult: number;
+  changeReported: boolean;
   seasoningMult: number;
   age: number | null;
+  ageAssumed: boolean;
 }
 
-/** One protocol's implied launch value and the full breakdown behind it. */
-export function impliedValue(p: SnapshotProtocol, asOf: string, multiples: Multiples): Scored {
+/**
+ * One protocol's implied launch value, its peer band and the full breakdown behind both.
+ * ageFallback is the age an unrecorded listing date is priced at: the median recorded age of
+ * the ranked set, computed by buildBoard from the same snapshot.
+ */
+export function impliedValue(p: SnapshotProtocol, asOf: string, bands: Bands, ageFallback: number): Scored {
   const age = ageDays(asOf, p.listed_at);
-  const cm = multiples.byCategory.get(p.category ?? 'Uncategorised');
-  const multiple = cm === undefined ? multiples.global : cm.multiple;
-  const peers = cm === undefined ? 0 : cm.peers;
-  const raw = typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : 0;
+  const band = bands.byCategory.get(p.category ?? 'Uncategorised') ?? bands.global;
+  const reported = typeof p.change_7d === 'number' && Number.isFinite(p.change_7d);
+  const raw = reported ? p.change_7d! : 0;
   const growthPct = Math.min(GROWTH_CAP, Math.max(GROWTH_FLOOR, raw));
-  const growthMult = 1 + (growthPct / 100) * GROWTH_WEIGHT;
-  const ageForModel = age ?? UNKNOWN_AGE_DAYS;
-  const seasoningMult = SEASONING_BASE + (Math.min(Math.max(ageForModel, 0), SEASONING_DAYS) / SEASONING_DAYS) * SEASONING_RANGE;
-  const implied = Math.max(1, Math.round(p.tvl_usd * multiple * growthMult * seasoningMult));
-  return { implied, multiple, peers, growthPct, growthMult, seasoningMult, age };
+  const growthMult = !reported ? 1 : growthPct >= 0 ? 1 + GAIN_WEIGHT * (growthPct / 100) : 1 + LOSS_WEIGHT * (growthPct / 100);
+  const ageForModel = age ?? ageFallback;
+  const seasoningMult = SEASONING_BASE + SEASONING_RANGE * Math.sqrt(Math.min(Math.max(ageForModel, 0), SEASONING_DAYS) / SEASONING_DAYS);
+  const implied = Math.max(1, Math.round(p.tvl_usd * band.multiple * growthMult * seasoningMult));
+  const impliedLow = Math.max(1, Math.min(implied, Math.round(p.tvl_usd * band.low * growthMult * seasoningMult)));
+  const impliedHigh = Math.max(implied, Math.round(p.tvl_usd * band.high * growthMult * seasoningMult));
+  return {
+    implied,
+    impliedLow,
+    impliedHigh,
+    multiple: band.multiple,
+    bandLow: band.low,
+    bandHigh: band.high,
+    peers: band.peers,
+    confidence: confidenceFor(band.peers),
+    growthPct,
+    growthMult,
+    changeReported: reported,
+    seasoningMult,
+    age,
+    ageAssumed: age === null,
+  };
 }
 
 /** One row of board.json. */
@@ -208,9 +291,15 @@ export interface BoardRow {
   watchlist: boolean;
   age_days: number | null;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
+  farm_chain: string;
   model: {
     peer_multiple: number;
+    peer_band_low: number;
+    peer_band_high: number;
     category_peers: number;
+    confidence: Confidence;
     growth_pct: number;
     growth_multiplier: number;
     seasoning_multiplier: number;
@@ -219,12 +308,13 @@ export interface BoardRow {
 }
 
 /** The board: every rankable pre-token protocol, implied value descending, slug as the tie-break. */
-export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; multiples: Multiples } {
-  const multiples = calibrate(snapshot.protocols);
+export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; bands: Bands } {
+  const bands = calibrate(snapshot.protocols);
   const watch = new Set(snapshot.watchlist);
-  const scored = snapshot.protocols
-    .filter(isRankable)
-    .map((p) => ({ p, s: impliedValue(p, snapshot.as_of, multiples) }));
+  const rankable = snapshot.protocols.filter(isRankable);
+  const knownAges = rankable.map((p) => ageDays(snapshot.as_of, p.listed_at)).filter((a): a is number => a !== null);
+  const ageFallback = knownAges.length > 0 ? Math.round(median(knownAges)) : UNKNOWN_AGE_DAYS;
+  const scored = rankable.map((p) => ({ p, s: impliedValue(p, snapshot.as_of, bands, ageFallback) }));
   scored.sort((a, b) => b.s.implied - a.s.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   const board = scored.map(({ p, s }, i) => ({
     rank: i + 1,
@@ -239,21 +329,150 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; multiples: 
     watchlist: watch.has(p.slug),
     age_days: s.age,
     implied_value_usd: s.implied,
+    implied_low_usd: s.impliedLow,
+    implied_high_usd: s.impliedHigh,
+    farm_chain: farmChain(p).chain,
     model: {
       peer_multiple: round4(s.multiple),
+      peer_band_low: round4(s.bandLow),
+      peer_band_high: round4(s.bandHigh),
       category_peers: s.peers,
+      confidence: s.confidence,
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       seasoning_multiplier: round4(s.seasoningMult),
     },
-    farm_steps: farmSteps(p, s.age),
+    farm_steps: farmSteps(p, s),
   }));
-  return { board, multiples };
+  return { board, bands };
 }
 
-/** The first chain a protocol names, or a neutral phrase. */
-function chainOf(p: SnapshotProtocol): string {
-  return p.chains.length > 0 ? p.chains[0]! : 'its main chain';
+/**
+ * A typical cost, in US dollars, of one ordinary transaction (a swap, a deposit) on a chain
+ * DefiLlama names, at ordinary congestion. The farm plan is written for the cheapest chain the
+ * protocol itself runs on: the same position farmed on Ethereum mainnet can cost fifty times
+ * the gas of the same position on Base, and a plan that hides that is not a plan.
+ */
+export const CHAIN_GAS_USD: Record<string, number> = {
+  Ethereum: 3.5,
+  Bitcoin: 2.0,
+  Litecoin: 0.05,
+  Doge: 0.1,
+  Tron: 0.8,
+  Binance: 0.15,
+  BSC: 0.15,
+  'BNB Chain': 0.15,
+  Op_Bnb: 0.05,
+  Solana: 0.02,
+  Eclipse: 0.02,
+  Soon: 0.02,
+  Base: 0.08,
+  Arbitrum: 0.12,
+  Optimism: 0.1,
+  'OP Mainnet': 0.1,
+  Polygon: 0.03,
+  Avalanche: 0.25,
+  'zkSync Era': 0.15,
+  Linea: 0.15,
+  Scroll: 0.2,
+  Mantle: 0.08,
+  Starknet: 0.15,
+  Blast: 0.1,
+  Mode: 0.1,
+  Manta: 0.1,
+  Taiko: 0.15,
+  Sei: 0.03,
+  Sui: 0.05,
+  Aptos: 0.05,
+  Near: 0.05,
+  'Near Protocol': 0.05,
+  Gnosis: 0.02,
+  xDai: 0.02,
+  Celo: 0.03,
+  Fantom: 0.05,
+  Sonic: 0.03,
+  Moonbeam: 0.1,
+  Moonriver: 0.05,
+  Aurora: 0.03,
+  Kava: 0.05,
+  Cronos: 0.05,
+  Harmony: 0.02,
+  Injective: 0.03,
+  Osmosis: 0.05,
+  Cosmos: 0.05,
+  Berachain: 0.1,
+  Hyperliquid: 0.02,
+  'Hyperliquid L1': 0.02,
+  Unichain: 0.08,
+  Ink: 0.08,
+  Worldchain: 0.08,
+  'World Chain': 0.08,
+  Zora: 0.08,
+  Fraxtal: 0.1,
+  BOB: 0.1,
+  Mint: 0.05,
+  XLayer: 0.05,
+  'X Layer': 0.05,
+  'Polygon zkEVM': 0.15,
+  Astar: 0.05,
+  Metis: 0.1,
+  Boba: 0.1,
+  Fuse: 0.02,
+  Velas: 0.02,
+  Rootstock: 0.05,
+  RSK: 0.05,
+  Core: 0.05,
+  CORE: 0.05,
+  BitTorrent: 0.02,
+  WEMIX: 0.05,
+  Kaia: 0.03,
+  Klaytn: 0.03,
+  Monad: 0.03,
+  'Robinhood Chain': 0.05,
+  Plasma: 0.03,
+  Ripple: 0.02,
+  XRP: 0.02,
+  Arc: 0.05,
+  Cardano: 0.15,
+  TON: 0.05,
+  Stellar: 0.01,
+  Flare: 0.03,
+  Hemi: 0.08,
+  'Plume Mainnet': 0.05,
+  Katana: 0.05,
+  Algorand: 0.01,
+  MegaETH: 0.03,
+  Tempo: 0.05,
+  Morph: 0.08,
+  TAC: 0.05,
+  XDC: 0.02,
+  Etherlink: 0.03,
+  Soneium: 0.08,
+  Filecoin: 0.05,
+  Telos: 0.03,
+  OKExChain: 0.05,
+  Hedera: 0.01,
+  Polkadot: 0.1,
+  Stable: 0.03,
+};
+
+/** The gas figure used for a chain the table does not name. */
+export const DEFAULT_GAS_USD = 0.4;
+
+/** The chain a farm plan is written for: the cheapest of the protocol's own chains, first-listed on a tie. */
+export function farmChain(p: SnapshotProtocol): { chain: string; gasUsd: number } {
+  let best: { chain: string; gasUsd: number } | null = null;
+  for (const chain of p.chains) {
+    const gasUsd = CHAIN_GAS_USD[chain] ?? DEFAULT_GAS_USD;
+    if (best === null || gasUsd < best.gasUsd) best = { chain, gasUsd };
+  }
+  return best ?? { chain: 'its main chain', gasUsd: DEFAULT_GAS_USD };
+}
+
+/** A dollar figure the way the farm steps quote it: cents under ten dollars, trimmed above. */
+export function dollars(n: number): string {
+  if (n < 10) return `$${n.toFixed(2).replace(/0$/, '')}`;
+  return `$${Math.round(n)}`;
 }
 
 /** Capital for one farm position, from the protocol's own TVL: bigger protocols absorb more. */
@@ -385,27 +604,53 @@ function step(text: string, cost: string, time: string): string {
 }
 
 /**
- * A protocol's farm plan: six steps derived from its own record — category playbook, first chain,
- * a capital size from its TVL and a hold from its age — each with what it costs and how long it
- * takes. Nothing is written per protocol by hand.
+ * The step a row's own 7-day record calls for, or null when the week was unremarkable: a steep
+ * fall asks for a safety check before any deposit, and growth fast enough to be rented asks for
+ * smaller sizing. Both come from the protocol's own change_7d, never from its name.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
-  const chain = chainOf(p);
+function riskStep(p: SnapshotProtocol): string | null {
+  if (typeof p.change_7d !== 'number' || !Number.isFinite(p.change_7d)) return null;
+  if (p.change_7d <= -15) {
+    return step(
+      `Before depositing anything, check ${p.name}'s own announcements for why its TVL fell ${Math.abs(p.change_7d).toFixed(1)}% in seven days — an exploit, a migration or an ended incentive each call for a different answer, and if no cause is published, farm something else first.`,
+      'nothing; this step is reading, not spending',
+      '20 minutes, before step 2',
+    );
+  }
+  if (p.change_7d >= 40) {
+    return step(
+      `Size the position as if the current incentive ends without notice: ${p.name}'s TVL grew ${p.change_7d.toFixed(1)}% in seven days, growth that fast is usually rented, so keep the position at the size above and no larger until the growth survives a second week.`,
+      'no extra cost; it caps the capital the other steps commit',
+      'no extra time',
+    );
+  }
+  return null;
+}
+
+/**
+ * A protocol's farm plan: six steps (seven when its own week calls for a caution) derived from
+ * its record — category playbook, the cheapest of its own chains to transact on, a capital size
+ * from its TVL and a hold from its age — each with what it costs and how long it takes. Gas is
+ * quoted for the chain the plan names, from CHAIN_GAS_USD. Nothing is written per protocol by hand.
+ */
+export function farmSteps(p: SnapshotProtocol, s: Scored): string[] {
+  const { chain, gasUsd } = farmChain(p);
   const capital = capitalFor(p);
-  const hold = holdDaysFor(age);
+  const hold = holdDaysFor(s.age);
   const book = playbookFor(p);
-  const gas = capital >= 250 ? 8 : capital >= 150 ? 6 : 4;
-  return [
+  const setupGas = Math.max(0.05, gasUsd * 3);
+  const touchGas = Math.max(0.02, gasUsd);
+  const steps = [
     step(
       `Open a fresh wallet for ${p.name} alone and fund it from your main wallet; a dedicated wallet keeps the farm attributable and its seed phrase stays offline.`,
-      'under $3 of gas for the funding transaction',
+      `under ${dollars(touchGas * 2)} of gas for the funding transaction on ${chain}`,
       '5 minutes',
     ),
-    step(book.open(p, chain, capital), `$${capital} of capital plus about $${gas} of gas`, '15 minutes to set up'),
-    step(book.deepen(p, chain, capital), 'about $2 of gas on top of the capital already in', '10 minutes, a week after step 2'),
-    step(book.weekly(p), 'about $2 of gas a week', '10 minutes a week'),
+    step(book.open(p, chain, capital), `$${capital} of capital plus about ${dollars(setupGas)} of gas on ${chain}`, '15 minutes to set up'),
+    step(book.deepen(p, chain, capital), `about ${dollars(touchGas * 2)} of gas on ${chain}, on top of the capital already in`, '10 minutes, a week after step 2'),
+    step(book.weekly(p), `about ${dollars(touchGas)} of gas a week on ${chain}`, '10 minutes a week'),
     step(
-      `Hold the position for at least ${hold} days so the activity appears in more than one weekly snapshot; ${p.name} has run ${age === null ? 'for an unrecorded span' : `about ${age} days`} with no token recorded, and short visits are the first thing a snapshot filter drops.`,
+      `Hold the position for at least ${hold} days so the activity appears in more than one weekly snapshot; ${p.name} has run ${s.age === null ? 'for an unrecorded span' : `about ${s.age} days`} with no token recorded, and short visits are the first thing a snapshot filter drops.`,
       `the $${capital} stays in the position for the whole hold`,
       `${hold} days`,
     ),
@@ -415,6 +660,9 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
       '10 minutes at the end',
     ),
   ];
+  const risk = riskStep(p);
+  if (risk !== null) steps.splice(1, 0, risk);
+  return steps;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value. */
@@ -427,6 +675,8 @@ export interface LiveRow {
   mcap_usd: number | null;
   change_7d: number | null;
   symbol: string | null;
+  /** The market's own mcap/TVL for this protocol: the very ratio the model learns from. */
+  own_multiple: number | null;
 }
 
 /** The live-token protocols, by market cap, for the dashboard's separate Live view. */
@@ -444,6 +694,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
       mcap_usd: p.mcap_usd,
       change_7d: p.change_7d,
       symbol: p.symbol,
+      own_multiple: p.mcap_usd !== null && p.tvl_usd > 0 ? round2(p.mcap_usd / p.tvl_usd) : null,
     }));
 }
 
@@ -458,12 +709,20 @@ export interface RadarRow {
   change_7d: number | null;
   listed_at: string | null;
   age_days: number | null;
+  age_assumed: boolean;
   watchlist: boolean;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
   peer_multiple: number;
+  peer_band_low: number;
+  peer_band_high: number;
   category_peers: number;
+  confidence: Confidence;
   growth_multiplier: number;
+  change_reported: boolean;
   seasoning_multiplier: number;
+  farm_chain: string;
   farm_steps: string[];
 }
 
@@ -476,13 +735,14 @@ export interface RadarData {
   watchlist_size: number;
   board_size: number;
   live_size: number;
-  calibration: { global_multiple: number; pairs: number; categories: CategoryMultiple[] };
+  total_implied_usd: number;
+  calibration: { global: CategoryBand; pairs: number; categories: CategoryBand[] };
   rows: RadarRow[];
   live: LiveRow[];
 }
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
-  const { board, multiples } = buildBoard(snapshot);
+  const { board, bands } = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -492,10 +752,11 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     watchlist_size: snapshot.watchlist.length,
     board_size: board.length,
     live_size: live.length,
+    total_implied_usd: board.reduce((sum, r) => sum + r.implied_value_usd, 0),
     calibration: {
-      global_multiple: round4(multiples.global),
-      pairs: multiples.pairs,
-      categories: [...multiples.byCategory.values()].sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1)),
+      global: bands.global,
+      pairs: bands.pairs,
+      categories: [...bands.byCategory.values()].sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1)),
     },
     rows: board.map((r) => ({
       rank: r.rank,
@@ -507,12 +768,20 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       change_7d: r.change_7d,
       listed_at: r.listed_at,
       age_days: r.age_days,
+      age_assumed: r.listed_at === null,
       watchlist: r.watchlist,
       implied_value_usd: r.implied_value_usd,
+      implied_low_usd: r.implied_low_usd,
+      implied_high_usd: r.implied_high_usd,
       peer_multiple: r.model.peer_multiple,
+      peer_band_low: r.model.peer_band_low,
+      peer_band_high: r.model.peer_band_high,
       category_peers: r.model.category_peers,
+      confidence: r.model.confidence,
       growth_multiplier: r.model.growth_multiplier,
+      change_reported: r.change_7d !== null,
       seasoning_multiplier: r.model.seasoning_multiplier,
+      farm_chain: r.farm_chain,
       farm_steps: r.farm_steps,
     })),
     live,
@@ -577,6 +846,9 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
     }
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0 || r.implied_value_usd > 100_000_000_000_000) {
       return `${r.slug} has implied value ${r.implied_value_usd}`;
+    }
+    if (r.implied_low_usd > r.implied_value_usd || r.implied_high_usd < r.implied_value_usd) {
+      return `${r.slug} has a value band that does not hold its implied value`;
     }
   }
   return null;

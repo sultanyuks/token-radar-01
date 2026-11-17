@@ -9,9 +9,15 @@
 <body>
 <header class="band">
   <div class="band-in">
-    <p class="kicker">Launch Radar · model radar-2 “peer multiple”</p>
+    <p class="kicker">Launch Radar · model radar-3 “peer band”</p>
     <h1>Which pre-token protocol is worth farming next?</h1>
     <p class="lede" id="lede">Reading the snapshot…</p>
+    <div class="stats" id="stats">
+      <div class="stat"><div class="k">Pre-token protocols ranked</div><div class="v" id="stat-rows">—</div></div>
+      <div class="stat"><div class="k">Watchlist covered</div><div class="v" id="stat-watch">—</div></div>
+      <div class="stat"><div class="k">Combined implied value</div><div class="v" id="stat-total">—</div></div>
+      <div class="stat"><div class="k">Global peer band (per $1 TVL)</div><div class="v" id="stat-band">—</div></div>
+    </div>
   </div>
 </header>
 <main>
@@ -27,6 +33,15 @@
           <option value="early">Early (below the floor)</option>
         </select>
       </label>
+      <label>TVL band
+        <select id="tvlband">
+          <option value="all">Any TVL</option>
+          <option value="b1">$1B and up</option>
+          <option value="b2">$100M – $1B</option>
+          <option value="b3">$10M – $100M</option>
+          <option value="b4">Under $10M</option>
+        </select>
+      </label>
       <label>Sort
         <select id="sort">
           <option value="rank">Implied value (rank)</option>
@@ -34,6 +49,8 @@
           <option value="change">7-day change</option>
           <option value="age">Age (days tokenless)</option>
           <option value="multiple">Peer multiple</option>
+          <option value="width">Widest value band</option>
+          <option value="peers">Most trading peers</option>
         </select>
       </label>
       <div class="seg" role="group" aria-label="View">
@@ -47,14 +64,14 @@
         <thead><tr>
           <th class="num">#</th><th>Protocol</th><th>Chains</th>
           <th class="num">TVL</th><th class="num">7d</th><th class="num">Age</th>
-          <th class="num">Peer ×</th><th class="num">Implied value</th><th></th>
+          <th class="num">Peer ×</th><th class="num">Implied value</th><th>Implied range (peer band)</th><th></th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <table id="live" hidden>
         <thead><tr>
           <th>Protocol</th><th>Symbol</th><th>Chains</th>
-          <th class="num">TVL</th><th class="num">Market cap</th><th class="num">7d</th>
+          <th class="num">TVL</th><th class="num">Market cap</th><th class="num">Mcap / TVL</th><th class="num">7d</th>
         </tr></thead>
         <tbody id="liverows"></tbody>
       </table>
@@ -64,21 +81,25 @@
   <section class="panel method" aria-label="How the model works">
     <h2>How the implied value is priced</h2>
     <p>The snapshot prices its own future launches. Of its 758 protocols, the ones whose token
-    already trades carry both a TVL and a market cap; the median market-cap/TVL ratio of those
-    pairs is the market's own answer to “what is a dollar of TVL worth once it has a token?”.
-    Each pre-token protocol is priced at its category's median ratio — shrunk toward the global
-    median so a thin category cannot shout — adjusted for its 7-day TVL momentum and for how long
-    it has run with no token recorded:</p>
-    <p class="formula">implied value = TVL × category peer multiple × growth factor × seasoning factor</p>
+    already trades carry both a TVL and a market cap, and the spread of their market-cap/TVL
+    ratios is the market's own answer to “what is a dollar of TVL worth once it has a token?”.
+    Each pre-token protocol is priced at its category's <em>median</em> ratio — and shown with
+    the band between its category's 25th and 75th percentile ratios, so a price never pretends
+    to be more certain than the peers behind it:</p>
+    <p class="formula">implied value = TVL × category median multiple × momentum factor × seasoning factor<br>
+    implied range = TVL × category quartile multiple × momentum factor × seasoning factor</p>
     <ul>
-      <li><strong>Growth factor</strong> = 1 + clamp(7-day change, −50%…+100%) × 0.6. Unreported change counts as 0.</li>
-      <li><strong>Seasoning factor</strong> = 0.75 + 0.5 × min(age, 1,460 days) / 1,460. Longer tokenless, richer the accrued unpriced activity; an unrecorded listing date sits at the neutral 730 days.</li>
+      <li><strong>Peer band.</strong> Each category percentile is shrunk geometrically toward the global one with weight peers/(peers+8): a category with forty trading peers keeps its own spread; one with two leans on the market's. A category with no trading peers is priced on the global band and says so.</li>
+      <li><strong>Momentum factor.</strong> Gains and losses are not symmetric evidence — a doubling of TVL in a week can be rented with an incentive, a halving is rarely faked. Gains pass through at 0.50 (clamped at +100%, so at most ×1.50), losses at 0.90 (clamped at −50%, so at least ×0.55). An unreported 7-day change is <em>not</em> read as zero: the factor is 1 and the row is flagged.</li>
+      <li><strong>Seasoning factor</strong> = 0.80 + 0.45 × √(min(age, 1,460 days) / 1,460). Concave: the premium for accrued, unpriced activity arrives early — the second tokenless year says less than the first. An unrecorded listing date is priced at the median age of the ranked protocols whose dates are recorded, and the row is flagged.</li>
+      <li><strong>Confidence</strong> follows the evidence behind the band: deep (10+ trading peers), solid (4–9), thin (1–3), global (none — priced on the market-wide band).</li>
+      <li><strong>Farm plans</strong> are written for the cheapest chain the protocol itself runs on, with gas quoted for that chain: the same position costs about $10.50 to set up on Ethereum and about $0.25 on Base, and a plan that hides that is not a plan. A protocol whose TVL fell 15% or more in the week gets a safety-check step before any deposit; one that grew 40% or more gets a sizing caution.</li>
       <li><strong>No name is special-cased.</strong> The same function scores every row, and every multiple is recomputed from the snapshot at run time — re-run on a future snapshot, the same program finds future launches early.</li>
       <li><strong>Pre-token means “records no token”</strong> in DefiLlama's record (no market cap, no CoinGecko id, no symbol) — a claim about the record, never proof a token does not exist. Trading protocols sit in the Live view at the market's own values, never mixed into this ranking.</li>
     </ul>
-    <h3>Category peer multiples, calibrated from this snapshot</h3>
+    <h3>Category peer bands, calibrated from this snapshot</h3>
     <div class="tablewrap"><table id="calib">
-      <thead><tr><th>Category</th><th class="num">Trading peers</th><th class="num">Median mcap / TVL</th></tr></thead>
+      <thead><tr><th>Category</th><th class="num">Trading peers</th><th class="num">25th pct</th><th class="num">Median mcap / TVL</th><th class="num">75th pct</th></tr></thead>
       <tbody id="calibrows"></tbody>
     </table></div>
     <p class="fine" id="fine"></p>
