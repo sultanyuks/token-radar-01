@@ -11,7 +11,7 @@ the reader a farm plan for every row.
 
 **Entry:** "Launch Radar" by @bright-otter-11 · Repository: https://github.com/sultanyuks/token-radar-01
 
-## The model (radar-4, peer band + efficiency & sensitivity)
+## The model (radar-5, peer band + auditable peers & risk flags)
 
 The snapshot prices its own future launches. Of its 758 protocols, 144 already trade; 128 of them
 carry both a TVL and a market cap. Each category's peer band is the 25th percentile, median and
@@ -44,6 +44,18 @@ peer multiple, so each detail view states what the market must believe — the m
 the price halves and the one at which it doubles, and whether the category's own band already
 crosses either line.
 
+Radar-5 makes the price auditable and its cautions explicit. **Auditable peers**: a band is a
+claim about a list, so each detail view carries the list — the category's trading peers by
+name, each with the market cap, TVL and ratio it contributes, sorted by ratio, the peers inside
+the shrunk band shaded; the quartiles are computed from exactly those ratios before shrinkage,
+so a reader can recount any multiple from the page that states it. **Risk flags**: cautions
+computed from the snapshot alone, each with a stated trigger — thin evidence (the band rests on
+1–3 trading peers), global band (no trading peer in the category at all), single chain (all
+TVL on one chain), young (a recorded listing date under 180 days ago) and 7d unreported (no
+7-day change in the record, so momentum is ×1 by construction). Flags never move a price; they
+say how far to trust it. A "How to read this board" section walks the first row end to end —
+record, band, week, age, price, plan — with its own computed numbers.
+
 No protocol name is special-cased; every multiple is recomputed from the snapshot at run time, so
 the same program re-run on a future snapshot finds future launches early. A protocol is ranked
 only when it records no token **and** is not a wrapped, staked or bridged product of one that
@@ -69,11 +81,14 @@ one that grew 40% or more gets a sizing caution instead.
 - `lib/model.ts` — the calibration (peer bands), the ranking and the farm-plan generator.
 - `vendor/makefun-board.ts` — the kit's dossier library, byte for byte.
 - `dashboard/` — the static page (no network): sortable, filterable board with a peer-band
-  range bar and an implied-per-$1-farmed figure on every row, per-protocol detail with the
-  value breakdown, the band, the evidence grade, a "what the market must believe" sensitivity
-  note and the farm plan, a Live view, and the method with the full calibration table.
-- `screenshots/` — the board, a detail view (Steakhouse Financial), a filtered view sorted
-  by farm efficiency, and the Live view, rendered from this dashboard.
+  range bar, an implied-per-$1-farmed figure and risk-flag chips on every row, per-protocol
+  detail with the value breakdown, the band, the named peer list behind it, the evidence
+  grade, the risk flags defined, a "what the market must believe" sensitivity note and the
+  farm plan, a "How to read this board" walk-through of the first row, a Live view, and the
+  method with the full calibration table.
+- `screenshots/` — the board with its risk-flag chips, a detail view (Steakhouse Financial)
+  with the peer table behind its price, a filtered view sorted by farm efficiency, and the
+  "How to read this board" walk-through, rendered from this dashboard.
 
 ## Run it
 

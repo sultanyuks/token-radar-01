@@ -5,7 +5,7 @@
 //   board.json    the ranked board the gate checks (implied value, its peer band, farm plan)
 //   data.js       the dashboard's dataset, written beside the page it copies in
 //   dashboard/    this repository's static page (renders with no network)
-//   screenshots/  this repository's three dashboard screenshots
+//   screenshots/  this repository's dashboard screenshots
 //   dossier.json  the judge's summary, written last with buildDossier from vendor/makefun-board.ts
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

@@ -78,6 +78,11 @@ tbody tr.row.sel { background: var(--teal-dim); }
   background: rgba(143, 161, 179, 0.14); color: var(--muted);
   font-size: 11px; font-weight: 600; vertical-align: 2px;
 }
+.riskchip {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 99px;
+  background: rgba(242, 109, 109, 0.12); color: #f09595;
+  font-size: 11px; font-weight: 600; vertical-align: 2px; white-space: nowrap;
+}
 .chains { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .pos { color: var(--green); }
 .neg { color: var(--red); }
@@ -123,6 +128,12 @@ tbody tr.row.sel { background: var(--teal-dim); }
 .caveats li::marker { color: var(--amber); }
 ol.steps { margin: 0; padding-left: 22px; display: grid; gap: 10px; max-width: 84ch; }
 ol.steps li::marker { color: var(--teal); font-weight: 700; }
+table.peers { font-size: 13.5px; }
+table.peers tbody tr.inband td { background: rgba(45, 212, 191, 0.07); }
+.read h2 { margin: 4px 0 8px; font-size: 20px; }
+.read p { max-width: 84ch; }
+ol.walk { margin: 0 0 8px; padding-left: 22px; display: grid; gap: 10px; max-width: 84ch; }
+ol.walk li::marker { color: var(--teal); font-weight: 700; }
 .method h2 { margin: 4px 0 8px; font-size: 20px; }
 .method h3 { margin: 20px 0 8px; font-size: 15px; }
 .method p, .method li { max-width: 84ch; }

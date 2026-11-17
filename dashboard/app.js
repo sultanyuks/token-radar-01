@@ -1,10 +1,11 @@
 /* Launch Radar page: renders window.RADAR (written by main.ts beside this page) with no network.
    Board view: every pre-token protocol, filterable and sortable — including by implied value per
-   $1 of farm capital — each row opening a detail view with its value breakdown, its peer band,
-   what the market must believe to halve or double its price, and its farm plan. Live view: the
-   protocols whose token already trades, kept apart at the market's own values. Query parameters
-   (?cat=, ?tier=, ?tvl=, ?q=, ?detail=, ?view=, ?sort=) set the opening state, which is how the
-   entry's screenshots were taken. */
+   $1 of farm capital — each row carrying its risk flags under its name and opening a detail view
+   with its value breakdown, its peer band, the named peer list behind that band, what the market
+   must believe to halve or double its price, and its farm plan. A "how to read this board"
+   section walks the first row end to end. Live view: the protocols whose token already trades,
+   kept apart at the market's own values. Query parameters (?cat=, ?tier=, ?tvl=, ?q=, ?detail=,
+   ?view=, ?sort=) set the opening state, which is how the entry's screenshots were taken. */
 'use strict';
 
 const R = window.RADAR;
@@ -14,6 +15,10 @@ const moneyFull = (n) => `$${Math.round(n).toLocaleString('en-US')}`;
 const pct = (n) => (n === null ? '—' : `${n > 0 ? '+' : ''}${n.toFixed(1)}%`);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const CONF_LABEL = { deep: 'deep evidence', solid: 'solid evidence', thin: 'thin evidence', global: 'global band only' };
+/* The risk flags, as they ride under a row's name on the board. Definitions live in the method
+   section and, with the row's own numbers filled in, in its detail view (flagLines below). */
+const FLAG_SHORT = { 'thin-evidence': 'thin evidence', 'global-band': 'global band', 'single-chain': 'single chain', young: 'under 6 months', 'unreported-7d': '7d unreported' };
+const flagChips = (r) => r.risk_flags.map((f) => `<span class="riskchip">${FLAG_SHORT[f]}</span>`).join('');
 
 const params = new URLSearchParams(location.search);
 const state = {
@@ -88,12 +93,12 @@ function filtered() {
 
 function renderBoard() {
   const rows = filtered();
-  $('count').textContent = `${rows.length} of ${R.board_size} pre-token protocols shown · ranked by implied launch value · the bar is each category's peer band (25th–75th percentile), the tick its price · the small figure under a price is the implied value per $1 of the farm capital its plan commits`;
+  $('count').textContent = `${rows.length} of ${R.board_size} pre-token protocols shown · ranked by implied launch value · the bar is each category's peer band (25th–75th percentile), the tick its price · the small figure under a price is the implied value per $1 of the farm capital its plan commits · the red chips under a name are its risk flags, defined in How to read this board`;
   $('rows').innerHTML = rows
     .map(
       (r) => `<tr class="row${state.detail === r.slug ? ' sel' : ''}" data-slug="${esc(r.slug)}">
       <td class="num">${r.rank}</td>
-      <td><span class="pname">${esc(r.name)}</span>${r.watchlist ? '<span class="flag">WATCHLIST</span>' : ''}${r.change_reported ? '' : '<span class="note">7d unreported</span>'}<br><span class="pcat">${esc(r.category ?? 'Uncategorised')}</span></td>
+      <td><span class="pname">${esc(r.name)}</span>${r.watchlist ? '<span class="flag">WATCHLIST</span>' : ''}${flagChips(r)}<br><span class="pcat">${esc(r.category ?? 'Uncategorised')}</span></td>
       <td class="chains">${esc(r.chains.slice(0, 3).join(', '))}${r.chains.length > 3 ? ` +${r.chains.length - 3}` : ''}</td>
       <td class="num">${money(r.tvl_usd)}</td>
       <td class="num ${r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg'}">${pct(r.change_7d)}</td>
@@ -125,11 +130,46 @@ function renderLive() {
 
 function caveats(r) {
   const out = [];
-  if (!r.change_reported) out.push('DefiLlama reports no 7-day change for this protocol, so its momentum factor is 1 — unreported is not read as zero growth or as decline.');
   if (r.age_assumed) out.push('DefiLlama records no listing date for this protocol, so its seasoning is priced at the median recorded age of the ranked set, not at its own age.');
-  if (r.confidence === 'thin') out.push(`Only ${r.category_peers} trading peer${r.category_peers === 1 ? '' : 's'} in its category carry both a TVL and a market cap, so this band leans heavily on the global one.`);
-  if (r.confidence === 'global') out.push('No protocol in its category trades with both a TVL and a market cap in the snapshot, so this row is priced on the global peer band.');
   return out;
+}
+
+/* The row's risk flags with their triggers stated against its own numbers. The evidence flags
+   restate what the confidence grade says, in caution form; the rest read the record's shape. */
+function flagLines(r) {
+  const defs = {
+    'thin-evidence': `<strong>Thin evidence</strong> — only ${r.category_peers} trading peer${r.category_peers === 1 ? '' : 's'} in its category ${r.category_peers === 1 ? 'carries' : 'carry'} both a TVL and a market cap, so this band leans heavily on the global one; the peer table below names ${r.category_peers === 1 ? 'it' : 'them'}.`,
+    'global-band': '<strong>Global band</strong> — no protocol in its category trades with both a TVL and a market cap in the snapshot, so the market-wide band below prices this row.',
+    'single-chain': `<strong>Single chain</strong> — every dollar of its TVL sits on ${esc(r.chains[0] ?? 'one chain')}; a halt or exploit on that one chain touches the whole position.`,
+    young: `<strong>Young</strong> — first tracked ${r.age_days} days ago, under six months; a record that short has not yet survived a bad market, so the plan's long hold matters more, not less.`,
+    'unreported-7d': '<strong>7d unreported</strong> — DefiLlama reports no 7-day change for this protocol, so its momentum factor is 1 by construction: unreported is not read as zero growth or as decline.',
+  };
+  return r.risk_flags.map((f) => defs[f]);
+}
+
+/* The peer list behind a row's band: its category's own table, or — for a row priced on the
+   global band — every category's peers together, sorted by ratio. */
+function peersFor(r) {
+  const cat = r.category ?? 'Uncategorised';
+  const t = R.peer_tables.find((x) => x.category === cat);
+  if (t && t.peers.length > 0) return { label: cat, peers: t.peers, global: false };
+  const all = R.peer_tables.flatMap((x) => x.peers).sort((a, b) => a.multiple - b.multiple || (a.slug < b.slug ? -1 : 1));
+  return { label: 'All categories', peers: all, global: true };
+}
+
+const mult = (m) => `${m < 1 ? m.toFixed(3) : m.toFixed(2)}×`;
+
+/* The auditable evidence: every peer behind the band, its own ratio beside the TVL and market
+   cap it comes from, the peers inside the shrunk band shaded. */
+function peerTable(r) {
+  const { label, peers, global } = peersFor(r);
+  const w = peers.length / (peers.length + 8);
+  const rows = peers
+    .map((p) => `<tr${p.multiple >= r.peer_band_low && p.multiple <= r.peer_band_high ? ' class="inband"' : ''}><td>${esc(p.name)}</td><td class="num">${mult(p.multiple)}</td><td class="num">${money(p.tvl_usd)}</td><td class="num">${money(p.mcap_usd)}</td></tr>`)
+    .join('');
+  return `<h3>The peers behind this price — ${esc(label)}${global ? ' (the global band)' : ''}</h3>
+    <p class="sub">The band above is this list's 25th–75th percentile, shrunk toward the global band with weight ${peers.length}/(${peers.length}+8) = ${w.toFixed(2)}; shaded rows trade inside the shrunk band (${mult(r.peer_band_low)} – ${mult(r.peer_band_high)}). Recount the quartiles from these ratios and you recount the price.</p>
+    <div class="tablewrap"><table class="peers"><thead><tr><th>Trading peer</th><th class="num">Mcap / TVL</th><th class="num">TVL</th><th class="num">Market cap</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 /* What the market must believe: the price is TVL × multiple, so it halves at half the pricing
@@ -177,11 +217,31 @@ function showDetail(slug, scroll = true) {
     <p class="eq">${moneyFull(r.tvl_usd)} TVL × ${r.peer_multiple.toFixed(2)} peer multiple × ${r.growth_multiplier.toFixed(2)} momentum × ${r.seasoning_multiplier.toFixed(2)} seasoning = <strong>${moneyFull(r.implied_value_usd)}</strong> if ${esc(r.name)} launched a token at its record today — and ${moneyFull(r.implied_low_usd)} to ${moneyFull(r.implied_high_usd)} across the middle half of its category's trading peers.</p>
     <h3>What the market must believe</h3>
     <p class="believe">${believeLines(r)}</p>
+    ${peerTable(r)}
+    <h3>Risk flags</h3>
+    ${r.risk_flags.length > 0 ? `<ul class="caveats">${flagLines(r).map((n) => `<li>${n}</li>`).join('')}</ul>` : '<p class="sub">No flag test fires on this row\'s record — which is not the same as safe, only as unflagged on these tests.</p>'}
     ${notes.length > 0 ? `<ul class="caveats">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
     <h3>Farm plan — written for ${esc(r.farm_chain)}, the cheapest of its chains to transact on</h3>
     <ol class="steps">${r.farm_steps.map((s) => `<li>${esc(s)}</li>`).join('')}</ol>`;
   box.hidden = false;
   if (scroll) box.scrollIntoView({ block: 'nearest' });
+}
+
+/* The worked example: the board's first row walked end to end with its own numbers — the
+   record, the band its peers set, its own week and age, the price they make, and the plan. */
+function renderRead() {
+  const w = R.worked_example;
+  const cat = w.category ?? 'Uncategorised';
+  $('readbody').innerHTML = `
+    <p>Take the board's first row, <strong>${esc(w.name)}</strong> (${esc(cat)}), and follow it the way the model does.</p>
+    <ol class="walk">
+      <li><strong>The record.</strong> ${esc(w.name)} holds ${moneyFull(w.tvl_usd)} of TVL and records no token — no market cap, no CoinGecko id, no symbol — so it belongs on this board, ranked by what its launch would be worth at today's record.</li>
+      <li><strong>The band.</strong> ${cat} has ${w.peers} trading peer${w.peers === 1 ? '' : 's'} carrying both a TVL and a market cap (${CONF_LABEL[w.confidence]}). Their ratios' middle half, shrunk toward the global band, runs ${mult(w.band_low)} – ${mult(w.band_high)} per TVL dollar, median ${mult(w.peer_multiple)} — and the peer table in ${esc(w.name)}'s detail view names ${w.peers === 1 ? 'that peer' : 'every one of them'}, so the band can be recounted, not just believed.</li>
+      <li><strong>Its own week and age.</strong> Its TVL moved ${pct(w.change_7d)} in seven days, which the asymmetric momentum rule turns into a factor of ${w.growth_multiplier.toFixed(2)}×; it has run ${w.age_days === null ? 'an unrecorded span' : `${w.age_days} days`} tokenless, which the concave seasoning curve turns into ${w.seasoning_multiplier.toFixed(2)}×.</li>
+      <li><strong>The price.</strong> ${moneyFull(w.tvl_usd)} × ${mult(w.peer_multiple)} × ${w.growth_multiplier.toFixed(2)} × ${w.seasoning_multiplier.toFixed(2)} = <strong>${moneyFull(w.implied_value_usd)}</strong>, with the band giving the range ${moneyFull(w.implied_low_usd)} – ${moneyFull(w.implied_high_usd)}. Against the ${moneyFull(w.farm_capital_usd)} its farm plan commits, that is ${money(w.implied_per_farm_dollar)} of implied value per $1 farmed.</li>
+      <li><strong>The plan.</strong> The plan is written for ${esc(w.farm_chain)}, the cheapest of its chains to transact on. It opens: ${esc(w.farm_steps[0] ?? '')}</li>
+    </ol>
+    <p>Every other row is read the same way: the chips under a name are its risk flags, the bar is its band, and its detail view shows the peers, the sensitivity and the full plan behind the price.</p>`;
 }
 
 function setView(view) {
@@ -198,7 +258,7 @@ function init() {
   $('lede').innerHTML =
     `The snapshot (<strong>${esc(R.as_of)}</strong>, DefiLlama via make.fun) holds <strong>${R.board_size} protocols that record no token</strong>. ` +
     `This radar prices each one's launch from the spread of its category's trading peers and ranks it — <strong>${R.watchlist_size} watchlist protocols</strong> at or above ${money(R.floor_usd)} TVL and every early one below the floor — with the steps to farm each, written for the cheapest chain it runs on. ` +
-    `Each row also states the implied value standing behind every $1 of the farm capital its own plan commits (sort by it), and each detail view states the peer multiple at which its price would halve or double. ` +
+    `Each row also states the implied value standing behind every $1 of the farm capital its own plan commits (sort by it), and each detail view states the peer multiple at which its price would halve or double, names every trading peer behind its band so the multiple can be recounted, and defines the risk flags its record earns. ` +
     `Trading protocols are set apart in the Live view.`;
   $('stat-rows').textContent = String(R.board_size);
   $('stat-watch').textContent = `${R.watchlist_size} of ${R.watchlist_size}`;
@@ -239,6 +299,7 @@ function init() {
   });
   renderBoard();
   renderLive();
+  renderRead();
   setView(state.view);
   if (state.detail) showDetail(state.detail, false);
 }

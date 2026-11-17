@@ -1,4 +1,4 @@
-// Launch Radar model (radar-4, "peer band + efficiency & sensitivity"): one sealed snapshot
+// Launch Radar model (radar-5, "peer band + auditable peers, risk flags"): one sealed snapshot
 // in, one ranked board out.
 //
 // THE MODEL. The snapshot itself says what a launched token is worth: many of its protocols
@@ -42,6 +42,18 @@
 //                    and whether its own category band already crosses either line. That is
 //                    "what the market must believe", in the market's own units.
 //
+// Two reader's safeguards ride on the same record, both computed from snapshot fields only:
+//   auditable peers  the band is a claim about a list, so the dashboard carries the list: every
+//                    category's trading peers by name, with the market cap, TVL and ratio each
+//                    contributes, sorted by ratio — the exact set the quartiles are computed
+//                    from, shrinkage aside. A reader who doubts a multiple can recount it.
+//   risk flags       four explicit cautions a row can carry, each with a stated trigger:
+//                    thin evidence (its category band rests on 1–3 trading peers, or on none —
+//                    the global band), single chain (all of its TVL sits on one chain), young
+//                    (a recorded listing date under 180 days ago) and 7d unreported (no 7-day
+//                    change in the record, so momentum is neutral by construction, not by
+//                    observation). Flags never move a price; they say how far to trust it.
+//
 // No protocol name is ever special-cased: the same function scores every row, and every multiple
 // is recomputed from the snapshot at run time, so the same program re-run on a future snapshot
 // finds future launches early. A protocol is pre-token when its record carries no token (no
@@ -81,7 +93,7 @@ export class SnapshotError extends Error {
   }
 }
 
-export const MODEL_VERSION = 'radar-4 peer-band, efficiency & sensitivity';
+export const MODEL_VERSION = 'radar-5 peer-band, auditable peers & risk flags';
 
 /** Shrinkage strength: a category percentile is blended toward the global one as if the global
  *  figure were SHRINK_PEERS extra observations of the category. */
@@ -142,10 +154,22 @@ export interface CategoryBand {
   high: number;
 }
 
+/** One trading protocol behind a category's band: the evidence a reader can recount. */
+export interface PeerEntry {
+  slug: string;
+  name: string;
+  /** Its own market cap / TVL, the ratio it contributes to its category's quartiles. */
+  multiple: number;
+  tvl_usd: number;
+  mcap_usd: number;
+}
+
 export interface Bands {
   global: CategoryBand;
   pairs: number;
   byCategory: Map<string, CategoryBand>;
+  /** The peer list behind each category's band, sorted by ratio ascending. */
+  peerLists: Map<string, PeerEntry[]>;
 }
 
 /** Blend one percentile geometrically toward the global one, weight peers/(peers+SHRINK_PEERS). */
@@ -163,6 +187,7 @@ function shrink(own: number, global: number, peers: number): number {
 export function calibrate(protocols: SnapshotProtocol[]): Bands {
   const ratios: number[] = [];
   const perCategory = new Map<string, number[]>();
+  const peerLists = new Map<string, PeerEntry[]>();
   for (const p of protocols) {
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const r = p.mcap_usd / p.tvl_usd;
@@ -171,7 +196,12 @@ export function calibrate(protocols: SnapshotProtocol[]): Bands {
     const list = perCategory.get(key);
     if (list === undefined) perCategory.set(key, [r]);
     else list.push(r);
+    const entry: PeerEntry = { slug: p.slug, name: p.name, multiple: round4(r), tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd };
+    const peers = peerLists.get(key);
+    if (peers === undefined) peerLists.set(key, [entry]);
+    else peers.push(entry);
   }
+  for (const peers of peerLists.values()) peers.sort((a, b) => a.multiple - b.multiple || (a.slug < b.slug ? -1 : 1));
   const all = [...ratios].sort((x, y) => x - y);
   const g = {
     low: all.length > 0 ? quantileSorted(all, 0.25) : 0.1,
@@ -190,8 +220,18 @@ export function calibrate(protocols: SnapshotProtocol[]): Bands {
       high: shrink(quantileSorted(s, 0.75), g.high, list.length),
     });
   }
-  return { global, pairs: ratios.length, byCategory };
+  return { global, pairs: ratios.length, byCategory, peerLists };
 }
+
+/** A recorded listing date younger than this many days earns the young risk flag. */
+export const YOUNG_AGE_DAYS = 180;
+
+/**
+ * The risk flags a row can carry, each computed from snapshot fields alone and each with a
+ * stated trigger (see riskFlagsFor). Flags never move a price: they say how far to trust it,
+ * and the dashboard defines every one of them in its method section.
+ */
+export type RiskFlag = 'thin-evidence' | 'global-band' | 'single-chain' | 'young' | 'unreported-7d';
 
 /** How much trading evidence stands behind a row's band, in words the dashboard can show. */
 export type Confidence = 'deep' | 'solid' | 'thin' | 'global';
@@ -201,6 +241,21 @@ export function confidenceFor(peers: number): Confidence {
   if (peers >= 4) return 'solid';
   if (peers >= 1) return 'thin';
   return 'global';
+}
+
+/**
+ * One protocol's risk flags, in display order: the evidence caution first, then the record's
+ * own shape. Every trigger reads the snapshot and nothing else — the peer count behind the
+ * band, the chain list, the recorded listing date, the presence of a 7-day change.
+ */
+export function riskFlagsFor(p: SnapshotProtocol, confidence: Confidence, age: number | null, changeReported: boolean): RiskFlag[] {
+  const flags: RiskFlag[] = [];
+  if (confidence === 'thin') flags.push('thin-evidence');
+  if (confidence === 'global') flags.push('global-band');
+  if (p.chains.length === 1) flags.push('single-chain');
+  if (age !== null && age < YOUNG_AGE_DAYS) flags.push('young');
+  if (!changeReported) flags.push('unreported-7d');
+  return flags;
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -264,6 +319,8 @@ export interface Scored {
   halfMultiple: number;
   /** The peer multiple at which this row's implied value doubles: twice the pricing multiple. */
   doubleMultiple: number;
+  /** The risk flags this row carries (riskFlagsFor): cautions, never price inputs. */
+  riskFlags: RiskFlag[];
 }
 
 /**
@@ -284,6 +341,7 @@ export function impliedValue(p: SnapshotProtocol, asOf: string, bands: Bands, ag
   const impliedLow = Math.max(1, Math.min(implied, Math.round(p.tvl_usd * band.low * growthMult * seasoningMult)));
   const impliedHigh = Math.max(implied, Math.round(p.tvl_usd * band.high * growthMult * seasoningMult));
   const farmCapital = capitalFor(p);
+  const confidence = confidenceFor(band.peers);
   return {
     implied,
     impliedLow,
@@ -292,7 +350,7 @@ export function impliedValue(p: SnapshotProtocol, asOf: string, bands: Bands, ag
     bandLow: band.low,
     bandHigh: band.high,
     peers: band.peers,
-    confidence: confidenceFor(band.peers),
+    confidence,
     growthPct,
     growthMult,
     changeReported: reported,
@@ -303,6 +361,7 @@ export function impliedValue(p: SnapshotProtocol, asOf: string, bands: Bands, ag
     impliedPerDollar: Math.round(implied / farmCapital),
     halfMultiple: band.multiple / 2,
     doubleMultiple: band.multiple * 2,
+    riskFlags: riskFlagsFor(p, confidence, age, reported),
   };
 }
 
@@ -336,6 +395,7 @@ export interface BoardRow {
     implied_per_farm_dollar: number;
     half_multiple: number;
     double_multiple: number;
+    risk_flags: RiskFlag[];
   };
   farm_steps: string[];
 }
@@ -378,6 +438,7 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; bands: Band
       implied_per_farm_dollar: s.impliedPerDollar,
       half_multiple: round4(s.halfMultiple),
       double_multiple: round4(s.doubleMultiple),
+      risk_flags: s.riskFlags,
     },
     farm_steps: farmSteps(p, s),
   }));
@@ -763,7 +824,34 @@ export interface RadarRow {
   implied_per_farm_dollar: number;
   half_multiple: number;
   double_multiple: number;
+  risk_flags: RiskFlag[];
   farm_chain: string;
+  farm_steps: string[];
+}
+
+/** The worked example the dashboard's "how to read this board" section walks through: the
+ *  board's first row, with every number the narrative quotes taken from its own scored row. */
+export interface WorkedExample {
+  slug: string;
+  name: string;
+  category: string | null;
+  tvl_usd: number;
+  peers: number;
+  confidence: Confidence;
+  band_low: number;
+  peer_multiple: number;
+  band_high: number;
+  change_7d: number | null;
+  growth_multiplier: number;
+  seasoning_multiplier: number;
+  age_days: number | null;
+  implied_low_usd: number;
+  implied_value_usd: number;
+  implied_high_usd: number;
+  farm_capital_usd: number;
+  implied_per_farm_dollar: number;
+  farm_chain: string;
+  /** The plan's first three steps, quoted in the walk-through. */
   farm_steps: string[];
 }
 
@@ -778,6 +866,9 @@ export interface RadarData {
   live_size: number;
   total_implied_usd: number;
   calibration: { global: CategoryBand; pairs: number; categories: CategoryBand[] };
+  /** The peer list behind each category's band, in the calibration table's order. */
+  peer_tables: { category: string; peers: PeerEntry[] }[];
+  worked_example: WorkedExample;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -785,6 +876,8 @@ export interface RadarData {
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const { board, bands } = buildBoard(snapshot);
   const live = liveRows(snapshot);
+  const categories = [...bands.byCategory.values()].sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1));
+  const first = board[0]!;
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -797,7 +890,30 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     calibration: {
       global: bands.global,
       pairs: bands.pairs,
-      categories: [...bands.byCategory.values()].sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1)),
+      categories,
+    },
+    peer_tables: categories.map((c) => ({ category: c.category, peers: bands.peerLists.get(c.category) ?? [] })),
+    worked_example: {
+      slug: first.slug,
+      name: first.name,
+      category: first.category,
+      tvl_usd: first.tvl_usd,
+      peers: first.model.category_peers,
+      confidence: first.model.confidence,
+      band_low: first.model.peer_band_low,
+      peer_multiple: first.model.peer_multiple,
+      band_high: first.model.peer_band_high,
+      change_7d: first.change_7d,
+      growth_multiplier: first.model.growth_multiplier,
+      seasoning_multiplier: first.model.seasoning_multiplier,
+      age_days: first.age_days,
+      implied_low_usd: first.implied_low_usd,
+      implied_value_usd: first.implied_value_usd,
+      implied_high_usd: first.implied_high_usd,
+      farm_capital_usd: first.model.farm_capital_usd,
+      implied_per_farm_dollar: first.model.implied_per_farm_dollar,
+      farm_chain: first.farm_chain,
+      farm_steps: first.farm_steps.slice(0, 3),
     },
     rows: board.map((r) => ({
       rank: r.rank,
@@ -826,6 +942,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       implied_per_farm_dollar: r.model.implied_per_farm_dollar,
       half_multiple: r.model.half_multiple,
       double_multiple: r.model.double_multiple,
+      risk_flags: r.model.risk_flags,
       farm_chain: r.farm_chain,
       farm_steps: r.farm_steps,
     })),
